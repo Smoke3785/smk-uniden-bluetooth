@@ -248,7 +248,7 @@ func (m *Uniden) UpdateSetting(setting string, valueInt int) error {
 	command := utils.ConcatenateStrings("BTreqSETC:", strconv.Itoa(settingObj.getDeviceStorageIndex()), "=", strconv.Itoa(valueInt))
 
 	// Write the command
-	m.println("Sending command to device: ", command)
+	// m.println("Sending command to device: ", command)
 	m.SendArbitraryCommand(command)
 
 	return nil
@@ -405,6 +405,8 @@ func (m *Uniden) handleGenericAttribute(buf []byte, c *types.Characteristic) {}
 func (m *Uniden) handleSettingsUpdate(buf []byte, c *types.Characteristic) {
 	changed := false
 
+	var changedSettings Settings
+
 	for index, value := range buf {
 
 		setting, err := m.Settings.getByDeviceStorageIndex(index)
@@ -413,6 +415,7 @@ func (m *Uniden) handleSettingsUpdate(buf []byte, c *types.Characteristic) {
 		}
 
 		if setting.ValueInt != int(value) {
+			changedSettings = append(changedSettings, setting)
 			setting.ValueInt = int(value)
 			changed = true
 		}
@@ -426,7 +429,7 @@ func (m *Uniden) handleSettingsUpdate(buf []byte, c *types.Characteristic) {
 		m.runCallbacks()
 
 		if m.server != nil {
-			m.server.handleSettingsUpdate(&m.Settings)
+			m.server.handleSettingsUpdate(&changedSettings)
 		}
 
 		// Invoke the onSettingsChange callback
@@ -539,7 +542,7 @@ func (m *Uniden) SendArbitraryCommand(command string) {
 	}
 
 	// Write the command
-	m.println("Sending command to device:", command)
+	// m.println("Sending command to device:", command)
 	char.WriteWithoutResponse([]byte(command))
 }
 

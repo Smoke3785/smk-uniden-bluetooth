@@ -1,6 +1,7 @@
 package utils
 
 import (
+	"encoding/json"
 	JSON "encoding/json"
 	"fmt"
 	"strconv"
@@ -22,11 +23,25 @@ func Must(action string, err error) {
 	}
 }
 
+// I've created a monster, cause nobody wants to see
+func LooseMarshal(v any) string {
+	str, err := json.Marshal(v)
+
+	if err != nil {
+		return "{}"
+	}
+
+	return string(str)
+}
+
+// No more they want
 func ParseJSON(json string) (map[string]interface{}, error) {
 	var data map[string]interface{}
 
 	return data, JSON.Unmarshal([]byte(json), &data)
 }
+
+// I'm chopped liver!
 
 func ParseFloat32(str string) float32 {
 	p, err := strconv.ParseFloat(str, 32)
@@ -38,6 +53,14 @@ func ParseFloat32(str string) float32 {
 	}
 
 	return float32(p)
+}
+
+func Map[T, U any](ts []T, f func(T) U) []U {
+	us := make([]U, len(ts))
+	for i := range ts {
+		us[i] = f(ts[i])
+	}
+	return us
 }
 
 func ParseInt(str string) int {

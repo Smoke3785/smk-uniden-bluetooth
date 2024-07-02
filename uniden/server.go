@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"log"
 
-	socketio "github.com/googollee/go-socket.io"
 	"github.com/smoke7385/smk-uniden-bluetooth/utils"
+	socket "github.com/zishang520/socket.io/v2/socket"
 
 	"net/http"
 	"strconv"
@@ -13,14 +13,15 @@ import (
 
 // SERVER
 type UnidenInterfaceServer struct {
-	socket *socketio.Server
-	uniden *Uniden
-	port   int
+	clients []*socket.Socket
+	socket  *socket.Server
+	uniden  *Uniden
+	port    int
 }
 
 // https://github.com/googollee/go-socket.io/tree/master/_examples
 func NewServer(uniden *Uniden, port int) *UnidenInterfaceServer {
-	server := socketio.NewServer(nil)
+	server := socket.NewServer(nil, nil)
 
 	uis := UnidenInterfaceServer{
 		socket: server,
@@ -28,52 +29,40 @@ func NewServer(uniden *Uniden, port int) *UnidenInterfaceServer {
 		port:   port,
 	}
 
-	server.OnConnect("/", func(s socketio.Conn) error {
-		s.SetContext("")
-		fmt.Println("connected:", s.ID())
-		return nil
-	})
-
-	server.OnEvent("/", "notice", func(s socketio.Conn, msg string) {
-		fmt.Println("notice:", msg)
-		s.Emit("reply", "have "+msg)
-	})
-
-	server.OnEvent("/chat", "msg", func(s socketio.Conn, msg string) string {
-		s.SetContext(msg)
-		return "recv " + msg
-	})
-
-	server.OnEvent("/", "bye", func(s socketio.Conn) string {
-		last := s.Context().(string)
-		s.Emit("bye", last)
-		s.Close()
-		return last
-	})
-
-	server.OnError("/", func(s socketio.Conn, e error) {
-		// server.Remove(s.ID())
-		fmt.Println("meet error:", e)
-	})
-
-	server.OnDisconnect("/", func(s socketio.Conn, reason string) {
-		// Add the Remove session id. Fixed the connection & mem leak
-		// server.Remove(s.ID())
-		fmt.Println("closed", reason)
-	})
-
 	return &uis
 }
 
 func (s *UnidenInterfaceServer) handleSettingsUpdate(settings *Settings) {
-	s.socket.BroadcastToNamespace("/", "settingsUpdate", settings)
+	fmt.Println("broadasting settings update")
+	s.broadcast("settingsUpdate", s.uniden.Settings.Serialize())
+}
+
+func (s *UnidenInterfaceServer) broadcast(ev string, args ...any) {
+	for _, client := range s.clients {
+		client.Emit(ev, args...)
+	}
+}
+
+func (s *UnidenInterfaceServer) listenForSocketEvents() {
+	s.socket.On("connection", func(clients ...any) {
+		client := clients[0].(*socket.Socket)
+		s.clients = append(s.clients, client)
+
+		client.Emit("settingsUpdate", s.uniden.Settings.Serialize())
+
+		client.On("handshake", func(data ...any) {
+			fmt.Println("handshake", data)
+		})
+
+		fmt.Println("connection", clients)
+	})
 }
 
 func (s *UnidenInterfaceServer) start() {
-	go s.socket.Serve()
-	defer s.socket.Close()
+	http.Handle("/", s.socket.ServeHandler(nil))
 
-	http.Handle("/", s.socket)
+	// EVENT HANDLER
+	s.listenForSocketEvents()
 
 	portString := utils.ConcatenateStrings(":", strconv.Itoa(s.port))
 	s.uniden.println("Server started on port:", portString)

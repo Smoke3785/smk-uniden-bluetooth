@@ -22,9 +22,9 @@ func main() {
 	})
 
 	unidenInstance.OnSettingsChange(func(settings uniden.Settings) {
-		for _, setting := range settings {
-			println("Setting:", setting.Name, "Value:", setting.CurrentValue().Name, "(", setting.CurrentValue().ID, ")")
-		}
+		// for _, setting := range settings {
+		// 	println("Setting:", setting.Name, "Value:", setting.CurrentValue().Name, "(", setting.CurrentValue().ID, ")")
+		// }
 	})
 
 	err := unidenInstance.Connect("E0:00:00:00:4F:C5")
@@ -63,6 +63,6 @@ func test(uniden *uniden.Uniden) {
 	utils.SetInterval(func() {
 		str := "BTreqSETC:50=" + strconv.Itoa(ic())
 		uniden.SendArbitraryCommand(str)
-		println()
+		// println()
 	}, 500*time.Millisecond)
 }
