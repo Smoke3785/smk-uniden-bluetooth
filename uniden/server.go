@@ -37,6 +37,10 @@ func (s *UnidenInterfaceServer) handleSettingsUpdate(settings *Settings) {
 	s.broadcast("settingsUpdate", s.uniden.Settings.Serialize())
 }
 
+func (s *UnidenInterfaceServer) handleRadarEvents(events []RadarEvent) {
+	s.broadcast("radarEvents", events)
+}
+
 func (s *UnidenInterfaceServer) broadcast(ev string, args ...any) {
 	for _, client := range s.clients {
 		client.Emit(ev, args...)

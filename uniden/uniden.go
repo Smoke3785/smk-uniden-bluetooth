@@ -52,11 +52,12 @@ type Uniden struct {
 	Verbose bool
 
 	// Internal state
-	server   *UnidenInterfaceServer
-	services []*types.Service
-	device   *types.Device
-	cache    UnidenCache
-	address  string
+	server          *UnidenInterfaceServer
+	services        []*types.Service
+	device          *types.Device
+	cache           UnidenCache
+	address         string
+	watchdogRunning bool
 
 	// State
 	Settings Settings
@@ -94,28 +95,48 @@ func (m *Uniden) Connect(address string) error {
 	m.println("Connecting to device:", address, "...")
 
 	// Enable bluetooth interface
-	utils.Must("enable BLE stack", adapter.Enable())
+	if err := adapter.Enable(); err != nil {
+		return fmt.Errorf("enabling BLE stack: %w", err)
+	}
 
+	m.address = address
+
+	if err := m.connectToDevice(); err != nil {
+		return err
+	}
+
+	m.startReconnectWatchdog()
+
+	return nil
+}
+
+
+func (m *Uniden) connectToDevice() error {
 	// Scan for devices
-	result, err := m.scanForDevice(address)
+	result, err := m.scanForDevice(m.address)
 	if err != nil {
 		return err
 	}
 
 	// Connect to the found device
 	_device, err := adapter.Connect(result.Address, bluetooth.ConnectionParams{})
-	device := types.Device{Device: _device}
-	utils.Must("connect to device device", err)
 	if err != nil {
-		return err
+		return fmt.Errorf("connecting to device: %w", err)
 	}
+	device := types.Device{Device: _device}
 
 	// Discover services
 	srvcs, err := device.DiscoverServices([]bluetooth.UUID{})
-	utils.Must("discover services", err)
+	if err != nil {
+		return fmt.Errorf("discovering services: %w", err)
+	}
 	if len(srvcs) == 0 {
 		return errors.New("no services identified")
 	}
+
+	// Reset any session state from a previous connection: (a rebooted detector has no active alerts)
+	m.services = nil
+	m.Alerts = nil
 
 	// Iterate over discovered services and characteristics
 	for _, _service := range srvcs {
@@ -124,7 +145,7 @@ func (m *Uniden) Connect(address string) error {
 
 		characteristics, err := service.DiscoverCharacteristics([]bluetooth.UUID{})
 		if err != nil {
-			println(err)
+			fmt.Println("Error discovering characteristics for service", service.UUID().String()+":", err)
 		}
 
 		for _, _char := range characteristics {
@@ -140,23 +161,83 @@ func (m *Uniden) Connect(address string) error {
 	// Request initial settings data
 	sErr := m.requestDeviceState()
 	if sErr != nil {
-		println("Error getting device state:", sErr)
+		fmt.Println("Error getting device state:", sErr)
 	} else {
-		println("Device state synced successfully")
+		fmt.Println("Device state synced successfully")
 	}
 
 	// Syncronize the time
 	tErr := m.SyncTime()
 	if tErr != nil {
-		println("Error syncing time:", tErr)
+		fmt.Println("Error syncing time:", tErr)
 	} else {
-		println("Device time synced successfully")
+		fmt.Println("Device time synced successfully")
 	}
 
-	m.address = address
 	m.device = &device
 
 	return nil
+}
+
+func (m *Uniden) startReconnectWatchdog() {
+	if m.watchdogRunning {
+		return
+	}
+	m.watchdogRunning = true
+
+	go func() {
+		const (
+			pollInterval   = 5 * time.Second
+			initialBackoff = 5 * time.Second
+			maxBackoff     = 60 * time.Second
+		)
+
+		for {
+			time.Sleep(pollInterval)
+
+			if m.device == nil || m.isLinkAlive() {
+				continue
+			}
+
+			fmt.Println("Lost connection to device, reconnecting...")
+
+			if m.onDisconnect != nil {
+				(m.onDisconnect)()
+			}
+
+			// Drop the stale session so the next health check reports dead
+			// (not "object not found") and callbacks hold no dead handles.
+			m.device = nil
+
+			for backoff := initialBackoff; ; backoff = min(backoff*2, maxBackoff) {
+				if err := m.connectToDevice(); err != nil {
+					fmt.Println("Reconnect failed:", err, "- retrying in", backoff)
+					time.Sleep(backoff)
+
+					continue
+				}
+
+				fmt.Println("Reconnected successfully")
+				if m.onConnect != nil {
+					(m.onConnect)()
+				}
+
+				break
+			}
+		}
+	}()
+}
+
+// isLinkAlive reports whether the connected device is still known to BlueZ.
+func (m *Uniden) isLinkAlive() bool {
+	settingsChar, err := m.getChar(types.C.Settings.String())
+	if err != nil {
+		return false
+	}
+
+	_, mtuErr := settingsChar.GetMTU()
+
+	return mtuErr == nil
 }
 
 // scanForDevice scans for the specified device address and returns the result.
@@ -164,30 +245,36 @@ func (m *Uniden) scanForDevice(address string) (bluetooth.ScanResult, error) {
 	m.println("Scanning for devices...")
 	ch := make(chan bluetooth.ScanResult, 1)
 
-	// Start scanning
-	err := adapter.Scan(func(adapter *bluetooth.Adapter, result bluetooth.ScanResult) {
-		if result.Address.String() == address {
-			m.println("Found Uniden device:", result.Address.String(), result.RSSI, result.LocalName())
-			adapter.StopScan()
-			ch <- result
-			return
+	go func() {
+		err := adapter.Scan(func(adapter *bluetooth.Adapter, result bluetooth.ScanResult) {
+			if result.Address.String() == address {
+				m.println("Found Uniden device:", result.Address.String(), result.RSSI, result.LocalName())
+				adapter.StopScan()
+				ch <- result
+				return
+			}
+		})
+		if err != nil {
+			fmt.Println("Scan error:", err)
 		}
-	})
-	if err != nil {
-		return bluetooth.ScanResult{}, err
-	}
+	}()
 
 	// Wait for the scan result
 	select {
 	case result := <-ch:
 		return result, nil
 	case <-time.After(10 * time.Second): // Timeout after 10 seconds
+		adapter.StopScan()
+
 		return bluetooth.ScanResult{}, errors.New("scan timeout")
 	}
 }
 
 func (m *Uniden) Disconnect() {
-	m.device.Disconnect()
+	if m.device != nil {
+		m.device.Disconnect()
+		m.device = nil
+	}
 
 	if m.onDisconnect != nil {
 		(m.onDisconnect)()
@@ -321,7 +408,7 @@ func (m *Uniden) SyncTime() error {
 
 	err = tSetting.Update(timeInt)
 	if err != nil {
-		println("Error syncing time:", err)
+		fmt.Println("Error syncing time:", err)
 	}
 
 	if !m.cache.TimeSynced {
@@ -331,22 +418,44 @@ func (m *Uniden) SyncTime() error {
 	return nil
 }
 
+const (
+	maxDeviceStateReadAttempts = 20
+	deviceStateReadRetryDelay  = 500 * time.Millisecond
+	settingsReadBufferSize     = 1024
+)
+
 func (m *Uniden) requestDeviceState() error {
 	// Find the command characteristic
 	char, err := m.getChar(types.C.Settings.String())
 	if err != nil {
-		println("Error finding settings characteristic to device")
+		return fmt.Errorf("finding settings characteristic: %w", err)
 	}
 
-	// Get value of the settings characteristic
-	var data []byte
-	_, err = char.Read(data)
+	// BlueZ reports the device as connected before the GATT link is ready to
+	// serve reads, so the first read can fail with "Not connected". Retry with
+	// a short delay until the link settles.
+	data := make([]byte, settingsReadBufferSize)
+	var n int
+	for attempt := 0; attempt < maxDeviceStateReadAttempts; attempt++ {
+		if attempt > 0 {
+			time.Sleep(deviceStateReadRetryDelay)
+		}
+
+		n, err = char.Read(data)
+		if err == nil {
+			break
+		}
+	}
 
 	if err != nil {
-		return err
+		return fmt.Errorf("reading settings characteristic after %d attempts: %w", maxDeviceStateReadAttempts, err)
 	}
 
-	m.handleSettingsUpdate(data, char)
+	if n > len(data) {
+		n = len(data)
+	}
+
+	m.handleSettingsUpdate(data[:n], char)
 
 	return nil
 }
@@ -493,6 +602,10 @@ func (m *Uniden) handleRadarEvent(buf []byte, c *types.Characteristic) {
 
 	if m.onRadarEvent != nil {
 		(m.onRadarEvent)(alerts)
+	}
+
+	if m.server != nil {
+		m.server.handleRadarEvents(alerts)
 	}
 }
 
