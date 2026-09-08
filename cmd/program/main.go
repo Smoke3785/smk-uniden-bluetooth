@@ -1,6 +1,8 @@
 package main
 
 import (
+	"fmt"
+	"os"
 	"strconv"
 	"time"
 
@@ -30,8 +32,8 @@ func main() {
 	err := unidenInstance.Connect("E0:00:00:00:4F:C5")
 
 	if err != nil {
-		println("Failed to connect to device:", err)
-		return
+		fmt.Println("Failed to connect to device:", err)
+		os.Exit(1)
 	}
 
 	// unidenInstance.SendArbitraryCommand("BTreqSETC:50=2")
