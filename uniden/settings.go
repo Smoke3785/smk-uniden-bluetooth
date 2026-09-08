@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/smoke7385/smk-uniden-bluetooth/types"
 	"github.com/smoke7385/smk-uniden-bluetooth/utils"
@@ -160,16 +159,6 @@ func generateKaSegment(segNum int, r4i int, r8i int, r9i int) *Setting {
 
 var adapter = bluetooth.DefaultAdapter
 
-type RadarEvent struct {
-	Band      types.Band
-	Frequency float32
-	Strength  int
-
-	LastUpdate time.Time
-
-	// TODO: Add the rest of the fields.
-}
-
 type Settings []*Setting
 
 var BooleanValues = Values{
@@ -257,7 +246,15 @@ func (v *Value) Alt(callback func(v *Value)) {
 }
 
 func (v *Value) Serialize() string {
-	return utils.LooseMarshal(v)
+	tempStruct := struct {
+		Name string `json:"name,omitempty"`
+		ID   *int   `json:"int,omitempty"`
+	}{
+		Name: v.Name,
+		ID:   &v.ID,
+	}
+
+	return utils.LooseMarshal(tempStruct)
 }
 
 type Values []Value
@@ -300,7 +297,6 @@ func (s *Setting) Update(valueInt int) error {
 	}
 
 	return nil
-
 }
 
 func (s *Setting) ValidateValueInt(valueInt int) error {
@@ -350,16 +346,20 @@ func (s *Setting) getDeviceStorageIndex() int {
 }
 
 type SerializedSetting struct {
-	Name   string `json:"name,omitempty"`
-	Value  string `json:"value,omitempty"`
-	Values string `json:"values,omitempty"`
+	Name               string `json:"name,omitempty"`
+	Value              string `json:"value,omitempty"`
+	Values             string `json:"values,omitempty"`
+	DeviceStorageIndex *int   `json:"deviceStorageIndex,omitempty"`
 }
 
 func (s *Setting) Serialize() string {
+	sIdx := s.getDeviceStorageIndex()
+
 	str, err := json.Marshal(SerializedSetting{
-		Value:  strconv.Itoa(s.CurrentValue().ID),
-		Values: s.Values.Serialize(),
-		Name:   s.Name,
+		DeviceStorageIndex: &sIdx,
+		Value:              strconv.Itoa(s.CurrentValue().ID),
+		Values:             s.GetValues().Serialize(),
+		Name:               s.Name,
 	})
 
 	if err != nil {
@@ -368,6 +368,3 @@ func (s *Setting) Serialize() string {
 
 	return string(str)
 }
-
-// TODO:
-// Boolean values don't marshal correctly

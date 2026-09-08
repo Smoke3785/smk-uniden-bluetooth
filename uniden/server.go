@@ -11,10 +11,17 @@ import (
 	"strconv"
 )
 
+// Client wraps a socket.io socket with a name. Socket contains atomic state,
+// so it must be referenced by pointer, never copied.
+type Client struct {
+	*socket.Socket
+	Name string
+}
+
 // SERVER
 type UnidenInterfaceServer struct {
-	clients []*socket.Socket
 	socket  *socket.Server
+	clients []*Client
 	uniden  *Uniden
 	port    int
 }
@@ -32,13 +39,34 @@ func NewServer(uniden *Uniden, port int) *UnidenInterfaceServer {
 	return &uis
 }
 
-func (s *UnidenInterfaceServer) handleSettingsUpdate(settings *Settings) {
-	fmt.Println("broadasting settings update")
+func (s *UnidenInterfaceServer) handleSettingsUpdate(settings *Settings, full bool) {
+	fmt.Println("broadasting limited settings update")
+
+	var bSettings *Settings
+
+	if full {
+		bSettings = &s.uniden.Settings
+	} else {
+		bSettings = settings
+	}
+
+	s.broadcast("settingsUpdate", bSettings.Serialize())
+
+}
+
+func (s *UnidenInterfaceServer) broadcastNewSettings() {
+	fmt.Println("broadasting full settings update")
 	s.broadcast("settingsUpdate", s.uniden.Settings.Serialize())
 }
 
-func (s *UnidenInterfaceServer) handleRadarEvents(events []RadarEvent) {
-	s.broadcast("radarEvents", events)
+func (s *UnidenInterfaceServer) handleStatusUpdate(status *Status) {
+	fmt.Println("broadasting status update")
+	s.broadcast("statusUpdate", s.uniden.Status.Serialize())
+}
+
+func (s *UnidenInterfaceServer) handleRadarEvent(events *RadarEvents) {
+	fmt.Println("broadasting radar events update")
+	s.broadcast("radarEventUpdate", events.Serialize())
 }
 
 func (s *UnidenInterfaceServer) broadcast(ev string, args ...any) {
@@ -49,13 +77,50 @@ func (s *UnidenInterfaceServer) broadcast(ev string, args ...any) {
 
 func (s *UnidenInterfaceServer) listenForSocketEvents() {
 	s.socket.On("connection", func(clients ...any) {
-		client := clients[0].(*socket.Socket)
+		client := &Client{Socket: clients[0].(*socket.Socket)}
 		s.clients = append(s.clients, client)
 
+		// Send initial settings state
 		client.Emit("settingsUpdate", s.uniden.Settings.Serialize())
 
-		client.On("handshake", func(data ...any) {
-			fmt.Println("handshake", data)
+		client.On("registerClient", func(data ...any) {
+			client.Name = data[0].(string)
+			fmt.Println("registerClient", client.Name)
+		})
+
+		client.On("updateSetting", func(data ...any) {
+			requestUpdateSetting := NewRequestUpdateSetting(data...)
+			setting, err := s.uniden.Settings.getByDeviceStorageIndex(requestUpdateSetting.DeviceStorageIndex)
+
+			if err != nil {
+				fmt.Println("Failed to find setting as requested by client.")
+				return
+			}
+
+			setting.Update(requestUpdateSetting.ValueInt)
+			fmt.Println("Updated setting upon client request")
+		})
+
+		client.On("mute", func(data ...any) {
+			err := s.uniden.Mute()
+			if err != nil {
+				fmt.Println("Failed to mute device upon client request")
+			} else {
+				fmt.Println("Muted device upon client request")
+			}
+
+			s.broadcastNewSettings()
+		})
+
+		client.On("unmute", func(data ...any) {
+			err := s.uniden.Unmute()
+			if err != nil {
+				fmt.Println("Failed to unmute device upon client request")
+			} else {
+				fmt.Println("Unmuted device upon client request")
+			}
+
+			s.broadcastNewSettings()
 		})
 
 		fmt.Println("connection", clients)

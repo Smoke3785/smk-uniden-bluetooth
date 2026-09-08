@@ -61,7 +61,7 @@ type Uniden struct {
 
 	// State
 	Settings Settings
-	Alerts   []RadarEvent
+	Alerts   RadarEvents
 	Status   Status
 
 	// Callbacks
@@ -110,7 +110,10 @@ func (m *Uniden) Connect(address string) error {
 	return nil
 }
 
-
+// connectToDevice establishes a GATT session with the detector at m.address,
+// discovers services and characteristics, and runs the initial sync. It
+// replaces any prior (possibly dead) session state, so it is safe to call
+// again after the connection has been lost.
 func (m *Uniden) connectToDevice() error {
 	// Scan for devices
 	result, err := m.scanForDevice(m.address)
@@ -134,7 +137,9 @@ func (m *Uniden) connectToDevice() error {
 		return errors.New("no services identified")
 	}
 
-	// Reset any session state from a previous connection: (a rebooted detector has no active alerts)
+	// Reset any session state from a previous connection: a rebooted detector
+	// has no active alerts, and the old service/characteristic objects hold
+	// stale DBus paths.
 	m.services = nil
 	m.Alerts = nil
 
@@ -179,6 +184,10 @@ func (m *Uniden) connectToDevice() error {
 	return nil
 }
 
+// startReconnectWatchdog launches a goroutine that polls the connection and
+// reconnects with backoff whenever the detector drops off. The detector
+// reboots the BLE radio when it loses power, which removes the DBus device
+// object entirely, so a cheap property read doubles as a liveness probe.
 func (m *Uniden) startReconnectWatchdog() {
 	if m.watchdogRunning {
 		return
@@ -229,7 +238,11 @@ func (m *Uniden) startReconnectWatchdog() {
 }
 
 // isLinkAlive reports whether the connected device is still known to BlueZ.
+// When the detector power cycles, BlueZ removes the device object and this
+// read fails with "object not found".
 func (m *Uniden) isLinkAlive() bool {
+	// Any characteristic works for this check; the settings characteristic is
+	// present on all supported models.
 	settingsChar, err := m.getChar(types.C.Settings.String())
 	if err != nil {
 		return false
@@ -245,6 +258,8 @@ func (m *Uniden) scanForDevice(address string) (bluetooth.ScanResult, error) {
 	m.println("Scanning for devices...")
 	ch := make(chan bluetooth.ScanResult, 1)
 
+	// adapter.Scan blocks until StopScan is called, so run it in its own
+	// goroutine; this function selects on its result and the timeout below.
 	go func() {
 		err := adapter.Scan(func(adapter *bluetooth.Adapter, result bluetooth.ScanResult) {
 			if result.Address.String() == address {
@@ -341,9 +356,9 @@ func (m *Uniden) UpdateSetting(setting string, valueInt int) error {
 
 // utils
 func (m *Uniden) Mute() error {
-	vSetting := m.Settings.getByName("Detector volume")
+	vSetting := m.Settings.getByName("Detector Volume")
 	if vSetting == nil {
-		return errors.New("detector volume setting not found")
+		return errors.New("detector Volume setting not found")
 	}
 
 	// If the volume is already muted, return
@@ -367,9 +382,9 @@ func (m *Uniden) Mute() error {
 }
 
 func (m *Uniden) Unmute() error {
-	vSetting := m.Settings.getByName("Detector volume")
+	vSetting := m.Settings.getByName("Detector Volume")
 	if vSetting == nil {
-		return errors.New("detector volume setting not found")
+		return errors.New("detector Volume setting not found")
 	}
 
 	// If the volume is already unmuted, return
@@ -536,7 +551,7 @@ func (m *Uniden) handleSettingsUpdate(buf []byte, c *types.Characteristic) {
 		m.runCallbacks()
 
 		if m.server != nil {
-			m.server.handleSettingsUpdate(&changedSettings)
+			m.server.handleSettingsUpdate(&changedSettings, true)
 		}
 
 		// Invoke the onSettingsChange callback
@@ -559,12 +574,16 @@ func (m *Uniden) handleStatusUpdate(buf []byte, c *types.Characteristic) {
 	if m.onStatusUpdate != nil {
 		(m.onStatusUpdate)(m.Status)
 	}
+
+	if m.server != nil {
+		m.server.handleStatusUpdate(&m.Status)
+	}
 }
 
 func (m *Uniden) handleRadarEvent(buf []byte, c *types.Characteristic) {
 	bStr := string(buf)
 	signalSections := strings.Split(bStr, "&")
-	var alerts []RadarEvent = m.Alerts
+	var alerts RadarEvents = m.Alerts
 
 	// TODO: Determine if the position of the signals matters.
 	for index, value := range signalSections {
@@ -603,7 +622,7 @@ func (m *Uniden) handleRadarEvent(buf []byte, c *types.Characteristic) {
 	}
 
 	if m.server != nil {
-		m.server.handleRadarEvents(alerts)
+		m.server.handleRadarEvent(&alerts)
 	}
 }
 

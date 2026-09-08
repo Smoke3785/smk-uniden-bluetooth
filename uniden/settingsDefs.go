@@ -13,12 +13,20 @@ var defSettings = Settings{
 			types.R8: 9,
 			types.R9: 11,
 		},
+		// NOTE: Unsure if this value is correct. Replacing with 0 index for now...
+		// Values: Values{
+		// 	{"1000ft / 300m", 1},
+		// 	{"2000ft / 600m", 2},
+		// 	{"2500ft / 760m", 3},
+		// 	{"3000ft / 900m", 4},
+		// 	{"Auto", 5},
+		// },
 		Values: Values{
-			{"1000ft / 300m", 1},
-			{"2000ft / 600m", 2},
-			{"2500ft / 760m", 3},
-			{"3000ft / 900m", 4},
-			{"Auto", 5},
+			{"1000ft / 300m", 0},
+			{"2000ft / 600m", 1},
+			{"2500ft / 760m", 2},
+			{"3000ft / 900m", 3},
+			{"Auto", 4},
 		},
 	},
 	&Setting{
@@ -683,7 +691,7 @@ var defSettings = Settings{
 	},
 
 	&Setting{
-		Name: "Detector volume",
+		Name: "Detector Volume",
 		StorageIndex: map[types.Model]int{
 			types.R4: 91,
 			types.R8: 101,

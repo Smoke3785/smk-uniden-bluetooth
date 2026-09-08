@@ -24,9 +24,9 @@ func main() {
 	})
 
 	unidenInstance.OnSettingsChange(func(settings uniden.Settings) {
-		// for _, setting := range settings {
-		// 	println("Setting:", setting.Name, "Value:", setting.CurrentValue().Name, "(", setting.CurrentValue().ID, ")")
-		// }
+		for _, setting := range settings {
+			println("Setting:", setting.Name, "Value:", setting.CurrentValue().Name, "(", setting.CurrentValue().ID, ")")
+		}
 	})
 
 	err := unidenInstance.Connect("E0:00:00:00:4F:C5")
@@ -45,7 +45,7 @@ func main() {
 
 	_, err = unidenInstance.StartServer(8080)
 
-	go test(unidenInstance)
+	// go test(unidenInstance)
 	unidenInstance.StayOpen()
 }
 
