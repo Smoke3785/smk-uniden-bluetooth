@@ -336,9 +336,7 @@ func (m *Uniden) UpdateSetting(setting string, valueInt int) error {
 
 	// Write the command
 	// m.println("Sending command to device: ", command)
-	m.SendArbitraryCommand(command)
-
-	return nil
+	return m.SendArbitraryCommand(command)
 }
 
 // utils
@@ -408,7 +406,7 @@ func (m *Uniden) SyncTime() error {
 
 	err = tSetting.Update(timeInt)
 	if err != nil {
-		fmt.Println("Error syncing time:", err)
+		return fmt.Errorf("updating time zone setting: %w", err)
 	}
 
 	if !m.cache.TimeSynced {
@@ -647,16 +645,18 @@ func (m *Uniden) getChar(characteristic string) (*types.Characteristic, error) {
 	return nil, errors.New("characteristic not found")
 }
 
-func (m *Uniden) SendArbitraryCommand(command string) {
+func (m *Uniden) SendArbitraryCommand(command string) error {
 	// Find the command characteristic
 	char, err := m.getChar(types.C.Command.String())
 	if err != nil {
-		println("Error writing to device")
+		return fmt.Errorf("finding command characteristic: %w", err)
 	}
 
 	// Write the command
 	// m.println("Sending command to device:", command)
-	char.WriteWithoutResponse([]byte(command))
+	_, err = char.WriteWithoutResponse([]byte(command))
+
+	return err
 }
 
 func (m *Uniden) println(args ...interface{}) {
